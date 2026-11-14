@@ -51,8 +51,12 @@
     outline: none;
   }
   input { flex: 1; }
+  input:disabled, button:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+  }
   button { cursor: pointer; }
-  button:hover { background: #0e1a0e; }
+  button:hover:not(:disabled) { background: #0e1a0e; }
   .hidden { display: none; }
 
   body.fade-out { opacity: 0; }
@@ -107,7 +111,7 @@ const BOOT_LINES = [
   '[ OK ] Подготовка терминала...',
 ];
 
-async function drawBar(duration = 1600, width = 28) {
+async function drawBar(duration = 2400, width = 28) {
   const line = document.createElement('div');
   line.className = 'line bar';
   term.appendChild(line);
@@ -128,31 +132,31 @@ async function drawBar(duration = 1600, width = 28) {
 async function boot() {
   for (const line of BOOT_LINES) {
     log(line, line.includes('[ OK ]') ? 'ok' : 'muted');
-    await sleep(200);
+    await sleep(320);              // было 200 — стало 320
   }
   log('');
-  await drawBar(1500);
-  await sleep(300);
+  await drawBar(2400);             // было 1500 — стало 2400
+  await sleep(450);
   log('');
   log('[ OK ] Загрузка завершена.', 'ok');
-  await sleep(450);
+  await sleep(650);                // было 450 — стало 650
 
   body.classList.add('fade-out');
-  await sleep(600);
+  await sleep(700);                // было 600 — стало 700
 
   term.innerHTML = '';
   body.classList.remove('fade-out');
   body.classList.add('fade-in');
-  await sleep(550);
+  await sleep(700);
 
   await postBoot();
 }
 
 /* ================== после «перезагрузки» ================== */
 async function postBoot() {
-  await sleep(250);
-  log('Добро пожаловать, претендент');
   await sleep(350);
+  log('Добро пожаловать, претендент');
+  await sleep(450);
   log('Введите имя команды');
   document.getElementById('team-row').classList.remove('hidden');
   document.getElementById('team-input').focus();
@@ -180,16 +184,38 @@ async function sha256Hex(str) {
     .join('');
 }
 
+async function makeAgentId(name) {
+  // соль + префикс, чтобы id не был чистым хэшем имени
+  return sha256Hex('agent::' + name + '::v1');
+}
+
+function randomHex(len = 32) {
+  const bytes = new Uint8Array(len / 2);
+  crypto.getRandomValues(bytes);
+  return [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
 function storeAgentId(id) {
   let cookieOk = false;
   try {
+    // настоящая кука
     document.cookie =
       'agent_id=' + encodeURIComponent(id) +
+      '; path=/; max-age=86400; SameSite=Lax';
+    // фейковые куки-приманки
+    document.cookie =
+      'agent_im=' + encodeURIComponent(randomHex(24)) +
+      '; path=/; max-age=86400; SameSite=Lax';
+    document.cookie =
+      'client_id=' + encodeURIComponent(randomHex(24)) +
       '; path=/; max-age=86400; SameSite=Lax';
     cookieOk = document.cookie.includes('agent_id=');
   } catch (_) {}
 
+  // fallback в localStorage
   localStorage.setItem('agent_id', id);
+  localStorage.setItem('agent_im', randomHex(24));
+  localStorage.setItem('client_id', randomHex(24));
 
   return cookieOk ? 'cookie' : 'storage';
 }
@@ -209,22 +235,71 @@ document.getElementById('start-btn').addEventListener('click', async () => {
   log('');
   log('[ .. ] Формирование идентификатора...', 'muted');
 
-  const agentId = await sha256Hex(name);
+  const agentId = await makeAgentId(name);
   storeAgentId(agentId);
 
-  await sleep(400);
+  await sleep(500);
   log('[ OK ] Последовательность запущена.', 'ok');
-  await sleep(300);
+  await sleep(400);
   log('');
   log('Введите agent_id');
   document.getElementById('agent-row').classList.remove('hidden');
   document.getElementById('agent-input').focus();
 });
 
-/* ================== проверка agent_id ================== */
+/* ================== защита: попытки и блокировка ================== */
+const MAX_ATTEMPTS = 3;
+const LOCK_SECONDS = 60;
+
+let attemptsLeft = MAX_ATTEMPTS;
+let locked = false;
+
 const agentInput = document.getElementById('agent-input');
+const agentBtn = document.getElementById('agent-btn');
+
+function setLockUI(isLocked) {
+  agentInput.disabled = isLocked;
+  agentBtn.disabled = isLocked;
+  if (!isLocked) agentInput.focus();
+}
+
+async function startLockout() {
+  locked = true;
+  setLockUI(true);
+
+  log('', '');
+  log('Защитная блокировка', 'err');
+
+  let remaining = LOCK_SECONDS;
+  const line = document.createElement('div');
+  line.className = 'line err';
+  term.appendChild(line);
+
+  const tick = () => {
+    const mm = String(Math.floor(remaining / 60)).padStart(2, '0');
+    const ss = String(remaining % 60).padStart(2, '0');
+    line.textContent = 'До снятия блокировки: ' + mm + ':' + ss;
+    term.scrollTop = term.scrollHeight;
+  };
+  tick();
+
+  while (remaining > 0) {
+    await sleep(1000);
+    remaining--;
+    tick();
+  }
+
+  line.textContent = 'Блокировка снята.';
+  line.className = 'line ok';
+
+  locked = false;
+  attemptsLeft = MAX_ATTEMPTS;
+  setLockUI(false);
+}
 
 async function checkAgent() {
+  if (locked) return;
+
   const typed = agentInput.value.trim();
   const stored = readAgentId();
 
@@ -232,15 +307,29 @@ async function checkAgent() {
     log('> Идентификатор не найден.', 'err');
     return;
   }
+
   if (typed === stored) {
     log('ОК', 'ok');
     document.getElementById('agent-row').classList.add('hidden');
     localStorage.setItem('agent_ok', '1');
+    agentInput.value = '';
+    return;
+  }
+
+  // неверный id
+  attemptsLeft--;
+  if (attemptsLeft > 0) {
+    log('> Неверный agent_id. Попыток до блокировки: ' + attemptsLeft, 'err');
+    agentInput.value = '';
+    agentInput.focus();
   } else {
-    log('> Неверный agent_id.', 'err');
+    log('> Неверный agent_id. Попыток до блокировки: 0', 'err');
+    agentInput.value = '';
+    await startLockout();
   }
 }
-document.getElementById('agent-btn').addEventListener('click', checkAgent);
+
+agentBtn.addEventListener('click', checkAgent);
 agentInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') checkAgent();
 });

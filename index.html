@@ -11,20 +11,35 @@
     color: #7dff7d;
     font-family: 'Courier New', monospace;
     font-size: 16px;
-    padding: 24px;
     line-height: 1.5;
     transition: opacity 0.45s ease;
+    display: flex;
+    flex-direction: column;
   }
-  body.fade-out { opacity: 0; }
-  body.fade-in  { opacity: 1; }
-
-  #term { white-space: pre-wrap; min-height: 60vh; }
+  #term {
+    flex: 1;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    padding: 24px 24px 8px;
+  }
   .muted { color: #3f7a3f; }
   .err   { color: #ff5c5c; }
   .ok    { color: #b6ff7d; }
   .bar   { color: #7dff7d; }
+  .line  { margin: 0; }
 
-  .line { margin: 0; }
+  #bottom {
+    border-top: 1px solid #1c3a1c;
+    padding: 12px 24px 20px;
+    background: #000;
+  }
+  .prompt-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 6px;
+  }
+  .prompt-sign { color: #7dff7d; }
 
   input, button {
     background: #000;
@@ -35,33 +50,34 @@
     padding: 6px 10px;
     outline: none;
   }
-  button { cursor: pointer; margin-left: 6px; }
+  input { flex: 1; }
+  button { cursor: pointer; }
   button:hover { background: #0e1a0e; }
-  .prompt-row { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
-  .prompt-sign { color: #7dff7d; }
   .hidden { display: none; }
+
+  body.fade-out { opacity: 0; }
+  body.fade-in  { opacity: 1; }
 </style>
 </head>
 <body>
 
 <div id="term"></div>
 
-<!-- строка ввода имени команды -->
-<div id="team-row" class="prompt-row hidden">
-  <span class="prompt-sign">&gt;</span>
-  <input id="team-input" placeholder="название команды" autocomplete="off" />
-</div>
+<div id="bottom">
+  <div id="team-row" class="prompt-row hidden">
+    <span class="prompt-sign">&gt;</span>
+    <input id="team-input" placeholder="название команды" autocomplete="off" />
+  </div>
 
-<!-- кнопка запуска последовательности -->
-<div id="start-row" class="prompt-row hidden">
-  <button id="start-btn">Запустить последовательность</button>
-</div>
+  <div id="start-row" class="prompt-row hidden">
+    <button id="start-btn">Запустить последовательность</button>
+  </div>
 
-<!-- ввод agent_id -->
-<div id="agent-row" class="prompt-row hidden">
-  <span class="prompt-sign">&gt;</span>
-  <input id="agent-input" placeholder="agent_id" autocomplete="off" />
-  <button id="agent-btn">Проверить</button>
+  <div id="agent-row" class="prompt-row hidden">
+    <span class="prompt-sign">&gt;</span>
+    <input id="agent-input" placeholder="agent_id" autocomplete="off" />
+    <button id="agent-btn">Проверить</button>
+  </div>
 </div>
 
 <script>
@@ -74,7 +90,7 @@ function log(text, cls = '') {
   div.className = 'line ' + cls;
   div.textContent = text;
   term.appendChild(div);
-  window.scrollTo(0, document.body.scrollHeight);
+  term.scrollTop = term.scrollHeight;
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -91,8 +107,7 @@ const BOOT_LINES = [
   '[ OK ] Подготовка терминала...',
 ];
 
-/* фейковый прогресс-бар */
-async function drawBar(duration = 1800, width = 28) {
+async function drawBar(duration = 1600, width = 28) {
   const line = document.createElement('div');
   line.className = 'line bar';
   term.appendChild(line);
@@ -105,42 +120,39 @@ async function drawBar(duration = 1800, width = 28) {
     line.textContent =
       '[' + '█'.repeat(filled) + '░'.repeat(empty) + '] ' +
       String(pct).padStart(3, ' ') + '%';
+    term.scrollTop = term.scrollHeight;
     await sleep(stepTime);
   }
 }
 
-/* основной boot */
 async function boot() {
   for (const line of BOOT_LINES) {
     log(line, line.includes('[ OK ]') ? 'ok' : 'muted');
-    await sleep(220);
+    await sleep(200);
   }
   log('');
-  await drawBar(1600);
-  await sleep(350);
+  await drawBar(1500);
+  await sleep(300);
   log('');
   log('[ OK ] Загрузка завершена.', 'ok');
-  await sleep(500);
+  await sleep(450);
 
-  /* экран гаснет */
   body.classList.add('fade-out');
   await sleep(600);
 
-  /* очистка, экран включается снова */
   term.innerHTML = '';
   body.classList.remove('fade-out');
   body.classList.add('fade-in');
-  await sleep(600);
+  await sleep(550);
 
-  /* пост-загрузка */
   await postBoot();
 }
 
 /* ================== после «перезагрузки» ================== */
 async function postBoot() {
-  await sleep(300);
+  await sleep(250);
   log('Добро пожаловать, претендент');
-  await sleep(400);
+  await sleep(350);
   log('Введите имя команды');
   document.getElementById('team-row').classList.remove('hidden');
   document.getElementById('team-input').focus();
@@ -156,12 +168,10 @@ teamInput.addEventListener('keydown', async (e) => {
   localStorage.setItem('team_name', name);
   document.getElementById('team-row').classList.add('hidden');
   log('> ' + name);
-  log('Имя команды сохранено.', 'muted');
-
   document.getElementById('start-row').classList.remove('hidden');
 });
 
-/* ================== запуск последовательности ================== */
+/* ================== утилиты ================== */
 async function sha256Hex(str) {
   const buf = new TextEncoder().encode(str);
   const hash = await crypto.subtle.digest('SHA-256', buf);
@@ -170,21 +180,40 @@ async function sha256Hex(str) {
     .join('');
 }
 
+function storeAgentId(id) {
+  let cookieOk = false;
+  try {
+    document.cookie =
+      'agent_id=' + encodeURIComponent(id) +
+      '; path=/; max-age=86400; SameSite=Lax';
+    cookieOk = document.cookie.includes('agent_id=');
+  } catch (_) {}
+
+  localStorage.setItem('agent_id', id);
+
+  return cookieOk ? 'cookie' : 'storage';
+}
+
+function readAgentId() {
+  const m = document.cookie.match(/(?:^|;\s*)agent_id=([^;]+)/);
+  if (m) return decodeURIComponent(m[1]);
+  return localStorage.getItem('agent_id');
+}
+
+/* ================== запуск последовательности ================== */
 document.getElementById('start-btn').addEventListener('click', async () => {
   const name = localStorage.getItem('team_name') || '';
   if (!name) return;
 
   document.getElementById('start-row').classList.add('hidden');
   log('');
-  log('[ .. ] Формирование agent_id...', 'muted');
+  log('[ .. ] Формирование идентификатора...', 'muted');
 
   const agentId = await sha256Hex(name);
-  // ставим cookie (доступна из JS — httpOnly:false)
-  document.cookie =
-    'agent_id=' + encodeURIComponent(agentId) +
-    '; path=/; max-age=86400; SameSite=Lax';
+  storeAgentId(agentId);
 
-  log('[ OK ] agent_id сформирован и записан в cookies.', 'ok');
+  await sleep(400);
+  log('[ OK ] Последовательность запущена.', 'ok');
   await sleep(300);
   log('');
   log('Введите agent_id');
@@ -194,20 +223,21 @@ document.getElementById('start-btn').addEventListener('click', async () => {
 
 /* ================== проверка agent_id ================== */
 const agentInput = document.getElementById('agent-input');
+
 async function checkAgent() {
   const typed = agentInput.value.trim();
-  const cookieMatch = document.cookie.match(/(?:^|;\s*)agent_id=([^;]+)/);
-  const cookieVal = cookieMatch ? decodeURIComponent(cookieMatch[1]) : null;
+  const stored = readAgentId();
 
-  if (!cookieVal) {
-    log('> agent_id в cookies не найден. Нажми «Запустить последовательность».', 'err');
+  if (!stored) {
+    log('> Идентификатор не найден.', 'err');
     return;
   }
-  if (typed === cookieVal) {
+  if (typed === stored) {
     log('ОК', 'ok');
     document.getElementById('agent-row').classList.add('hidden');
+    localStorage.setItem('agent_ok', '1');
   } else {
-    log('> Неверный agent_id. Проверь cookies в DevTools.', 'err');
+    log('> Неверный agent_id.', 'err');
   }
 }
 document.getElementById('agent-btn').addEventListener('click', checkAgent);
